@@ -206,3 +206,8 @@ taus, adev, errors, ns = allantools.oadev(
     taus='all'
 )
 ```
+
+## TODO
+- Seperate polling from saving in different threads to saving to CSV or DB doesn't block
+- Improved UI using https://textual.textualize.io/
+- Think about ways to implement logging of over data other than Freq 
