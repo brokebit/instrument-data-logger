@@ -16,7 +16,7 @@ For instruments connected via a National Instruments GPIB adapter (e.g. NI GPIB-
 ## Project Structure
 
 ```
-main.py                      Entry point and polling loop
+data_log.py                      Entry point and polling loop
 instruments/
     base.py                  CounterReading and CounterInstrument abstract base class
     dg912_pro.py             Rigol DG912 Pro implementation (USB)
@@ -59,7 +59,7 @@ print(rm.list_resources())
 ## Usage
 
 ```
-python main.py --resource <VISA address> --run-name <name> [options]
+python data_log.py --resource <VISA address> --run-name <name> [options]
 ```
 
 ### Arguments
@@ -77,7 +77,7 @@ python main.py --resource <VISA address> --run-name <name> [options]
 
 Collect 100 samples from a DG912 Pro at 100 ms gate time, writing to CSV:
 ```bash
-python main.py \
+python data_log.py \
     --resource "USB0::0x1AB1::0x0641::DG9A1234::INSTR" \
     --run-name "bench_test_01" \
     --gate-time 0.1 \
@@ -87,7 +87,7 @@ python main.py \
 
 Collect indefinitely from a CNT-90 via GPIB, writing to InfluxDB:
 ```bash
-python main.py \
+python data_log.py \
     --resource "GPIB0::12::INSTR" \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
@@ -96,7 +96,7 @@ python main.py \
 
 Write to both CSV and InfluxDB simultaneously:
 ```bash
-python main.py \
+python data_log.py \
     --resource "GPIB0::12::INSTR" \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
@@ -167,7 +167,7 @@ Create a new file in `instruments/` that subclasses `CounterInstrument` from `in
 - `read()` — return a `list` of `CounterReading` objects (one per measurement in the current poll)
 - `close()` — stop the instrument and close the VISA connection
 
-Then update the import and instantiation in `main.py`.
+Then update the import and instantiation in `data_log.py`.
 
 ## Adding a Writer
 
@@ -177,7 +177,7 @@ Create a new file in `writers/` that subclasses `DataWriter` from `writers/base.
 - `write(reading, sample_number, run_name, gate_time_seconds)` — persist one reading
 - `close()` — flush and close
 
-Add instantiation of the new writer inside `build_writer()` in `main.py`. `CompositeWriter` will fan out to it automatically alongside any other active writers.
+Add instantiation of the new writer inside `build_writer()` in `data_log.py`. `CompositeWriter` will fan out to it automatically alongside any other active writers.
 
 ## Allan Deviation Analysis
 
