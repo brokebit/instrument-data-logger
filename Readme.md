@@ -1,5 +1,7 @@
 # Frequency Counter Polling Tool
 
+99% of this code has been writen by either Claude Sonnet 4.6 or OpenAI Codex GPT 3.5. 
+
 A Python command-line tool for polling a frequency counter over VISA, with support for multiple instruments and configurable output destinations.
 
 ## Features
