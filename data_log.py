@@ -30,6 +30,8 @@ Example:
 """
 
 import argparse
+import queue
+import threading
 import time
 from instruments.dg912_pro import DG912Pro
 from writers.csv_writer import CSVWriter
@@ -37,23 +39,13 @@ from writers.composite_writer import CompositeWriter
 from writers.influx_writer import InfluxWriter
 
 
-def format_frequency(hz):
-    if hz >= 1000000.0:
-        scaled = hz / 1000000.0
-        return str(round(scaled, 6)) + " MHz"
-    elif hz >= 1000.0:
-        scaled = hz / 1000.0
-        return str(round(scaled, 6)) + " kHz"
-    else:
-        return str(round(hz, 6)) + " Hz"
-
-
-def display_reading(reading, sample_number, run_name, gate_time_seconds):
-    print("Sample     : " + str(sample_number))
-    print("Run        : " + run_name)
-    print("Gate Time  : " + str(gate_time_seconds * 1000) + " ms")
-    print("Frequency  : " + format_frequency(reading.frequency))
-    print()
+def display_status(sample_number, queue_depth, queue_capacity):
+    print(
+        "\rSample: " + str(sample_number)
+        + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity),
+        end="",
+        flush=True
+    )
 
 
 def build_writer(args):
@@ -77,6 +69,134 @@ def build_writer(args):
         writers.append(influx_writer)
 
     return CompositeWriter(writers)
+
+
+def read_instrument_loop(
+    instrument,
+    readings_queue,
+    gate_time_seconds,
+    num_samples,
+    stop_event,
+    reader_done_event,
+    num_samples_reached_event,
+    error_queue
+):
+    sample_number = 1
+    next_poll_time = time.monotonic()
+    exit_reason = "stop requested"
+
+    try:
+        while not stop_event.is_set():
+            if num_samples is not None and sample_number > num_samples:
+                num_samples_reached_event.set()
+                exit_reason = "target sample count reached"
+                break
+
+            wait_seconds = next_poll_time - time.monotonic()
+            if wait_seconds > 0 and stop_event.wait(wait_seconds):
+                break
+
+            readings = instrument.read()
+
+            for reading in readings:
+                if stop_event.is_set():
+                    break
+
+                if num_samples is not None and sample_number > num_samples:
+                    num_samples_reached_event.set()
+                    exit_reason = "target sample count reached"
+                    break
+
+                # Backpressure policy: block when queue is full so we do not
+                # silently drop samples.
+                enqueued = False
+                while not stop_event.is_set():
+                    try:
+                        readings_queue.put((reading, sample_number), timeout=0.1)
+                        enqueued = True
+                        break
+                    except queue.Full:
+                        continue
+
+                if not enqueued:
+                    exit_reason = "stop requested"
+                    break
+
+                sample_number = sample_number + 1
+
+            next_poll_time = next_poll_time + gate_time_seconds
+            if next_poll_time < time.monotonic():
+                next_poll_time = time.monotonic()
+
+    except Exception as error:
+        error_queue.put(("reader", error))
+        stop_event.set()
+        exit_reason = "error"
+
+    finally:
+        reader_done_event.set()
+        print(
+            "\nInstrument read loop finished. "
+            + "Samples queued: " + str(sample_number - 1)
+            + ". Reason: " + exit_reason + "."
+        )
+
+
+def write_loop(
+    writer,
+    readings_queue,
+    run_name,
+    gate_time_seconds,
+    stop_event,
+    reader_done_event,
+    error_queue
+):
+    next_status_time = time.monotonic() + 1.0
+    last_sample_number = 0
+    status_line_active = False
+
+    try:
+        while True:
+            if reader_done_event.is_set() and readings_queue.empty():
+                break
+
+            try:
+                reading, sample_number = readings_queue.get(timeout=0.1)
+            except queue.Empty:
+                current_time = time.monotonic()
+                if last_sample_number > 0 and current_time >= next_status_time:
+                    display_status(
+                        last_sample_number,
+                        readings_queue.qsize(),
+                        readings_queue.maxsize
+                    )
+                    status_line_active = True
+                    next_status_time = current_time + 1.0
+                continue
+
+            try:
+                writer.write(reading, sample_number, run_name, gate_time_seconds)
+                last_sample_number = sample_number
+
+                current_time = time.monotonic()
+                if current_time >= next_status_time:
+                    display_status(
+                        sample_number,
+                        readings_queue.qsize(),
+                        readings_queue.maxsize
+                    )
+                    status_line_active = True
+                    next_status_time = current_time + 1.0
+            finally:
+                readings_queue.task_done()
+
+    except Exception as error:
+        error_queue.put(("writer", error))
+        stop_event.set()
+
+    finally:
+        if status_line_active:
+            print("")
 
 
 def parse_args():
@@ -120,6 +240,13 @@ def parse_args():
         help="InfluxDB target as host:port:database (e.g. influx_host:8086:samples_db)."
     )
 
+    parser.add_argument(
+        "--queue-size",
+        type=int,
+        default=10000,
+        help="Max in-memory samples to buffer between reader and writer threads (default: 10000)."
+    )
+
     return parser.parse_args()
 
 
@@ -130,6 +257,7 @@ def main():
     run_name          = args.run_name
     gate_time_seconds = args.gate_time
     num_samples       = args.num_samples
+    queue_size        = args.queue_size
 
     instrument = DG912Pro()
 
@@ -140,7 +268,12 @@ def main():
         return
 
     print("Connecting to  : " + resource_address)
-    instrument.init(resource_address, gate_time_seconds)
+    try:
+        instrument.init(resource_address, gate_time_seconds)
+    except Exception as error:
+        writer.close()
+        print("Error: " + str(error))
+        return
     print("Run name       : " + run_name)
     print("Gate time      : " + str(gate_time_seconds * 1000) + " ms")
     if num_samples is not None:
@@ -151,30 +284,72 @@ def main():
         print("CSV output     : " + args.output_csv)
     if args.output_influx is not None:
         print("InfluxDB output: " + args.output_influx)
+    print("Queue size     : " + str(queue_size))
     print()
 
-    sample_number = 1
+    readings_queue = queue.Queue(maxsize=queue_size)
+    stop_event = threading.Event()
+    reader_done_event = threading.Event()
+    num_samples_reached_event = threading.Event()
+    error_queue = queue.Queue()
+
+    reader_thread = threading.Thread(
+        target=read_instrument_loop,
+        args=(
+            instrument,
+            readings_queue,
+            gate_time_seconds,
+            num_samples,
+            stop_event,
+            reader_done_event,
+            num_samples_reached_event,
+            error_queue,
+        ),
+        name="instrument-reader"
+    )
+
+    writer_thread = threading.Thread(
+        target=write_loop,
+        args=(
+            writer,
+            readings_queue,
+            run_name,
+            gate_time_seconds,
+            stop_event,
+            reader_done_event,
+            error_queue,
+        ),
+        name="data-writer"
+    )
+
+    reader_thread.start()
+    writer_thread.start()
 
     try:
-        while True:
-            readings = instrument.read()
+        while reader_thread.is_alive() or writer_thread.is_alive():
+            reader_thread.join(timeout=0.2)
+            writer_thread.join(timeout=0.2)
 
-            for reading in readings:
-                display_reading(reading, sample_number, run_name, gate_time_seconds)
-                writer.write(reading, sample_number, run_name, gate_time_seconds)
-                sample_number = sample_number + 1
-
-                if num_samples is not None and sample_number > num_samples:
-                    print("Collected " + str(num_samples) + " samples. Done.")
-                    return
-
-            time.sleep(gate_time_seconds)
+            if not error_queue.empty():
+                break
 
     except KeyboardInterrupt:
         print("")
         print("Polling stopped by user.")
+        stop_event.set()
 
     finally:
+        stop_event.set()
+        reader_thread.join()
+        writer_thread.join()
+
+        if not error_queue.empty():
+            component, error = error_queue.get()
+            print("Error in " + component + " thread: " + str(error))
+
+        if num_samples_reached_event.is_set():
+            print("Collected " + str(num_samples) + " samples. Done.")
+
         instrument.close()
         writer.close()
         print("Connection closed.")
