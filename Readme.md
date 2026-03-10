@@ -5,9 +5,10 @@ A Python command-line tool for polling a frequency counter over VISA, with suppo
 ## Features
 
 - Polls a frequency counter at a configurable gate time
+- Decouples instrument polling from persistence using two threads and a bounded queue
 - Supports multiple instruments via a common abstraction layer
 - Writes results to CSV, InfluxDB 1.x, or both simultaneously
-- Prints live readings to the console during collection
+- Prints a once-per-second progress status (latest sample number and queue depth)
 - Stops cleanly on Ctrl+C or after a fixed number of samples
 
 
@@ -16,7 +17,7 @@ For instruments connected via a National Instruments GPIB adapter (e.g. NI GPIB-
 ## Project Structure
 
 ```
-data_log.py                      Entry point and polling loop
+data_log.py                      Entry point and threaded polling/writer pipeline
 instruments/
     base.py                  CounterReading and CounterInstrument abstract base class
     dg912_pro.py             Rigol DG912 Pro implementation (USB)
@@ -27,6 +28,17 @@ writers/
     influx_writer.py         Writes readings to InfluxDB 1.x
     composite_writer.py      Fans out writes to multiple writers simultaneously
 ```
+
+## Runtime Architecture
+
+`data_log.py` runs two worker threads connected by a bounded in-memory queue:
+
+- Reader thread: polls the instrument on gate-time cadence and pushes readings into the queue
+- Writer thread: consumes queued readings and fans writes to one or more configured writers
+
+This decoupling allows instrument acquisition to continue while slower storage backends (for example networked InfluxDB writes) catch up.
+
+Console output is intentionally lightweight during runs: an in-place status line is updated once per second with the latest processed sample number and queue depth.
 
 ## Supported Instruments
 
@@ -72,6 +84,7 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 | `--num-samples` | No | — | Number of samples to collect. Omit to run indefinitely |
 | `--output-csv` | No | — | Path to a CSV file to write results to |
 | `--output-influx` | No | — | InfluxDB target as `host:port:database` |
+| `--queue-size` | No | `10000` | Maximum queued samples buffered between reader and writer threads |
 
 ### Examples
 
@@ -208,6 +221,6 @@ taus, adev, errors, ns = allantools.oadev(
 ```
 
 ## TODO
-- Seperate polling from saving in different threads to saving to CSV or DB doesn't block
 - Improved UI using https://textual.textualize.io/
-- Think about ways to implement logging of over data other than Freq 
+- Think about ways to implement logging of data types other than frequency
+- Update the CNT-90 instrment code to use the Prologix Ethernet GPIB adapter
