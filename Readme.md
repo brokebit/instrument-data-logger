@@ -59,12 +59,19 @@ TCPIP0::192.168.100.217::inst0::INSTR
 
 ### Pendulum CNT-90
 
-Connected via USB or GPIB (e.g. via NI GPIB-USB-HS adapter). Uses continuous buffered measurement mode — the instrument measures autonomously and accumulates results in an internal buffer. Each `read()` call drains everything that has accumulated since the last call, which may be zero or more readings depending on timing relative to the gate time.
+Connected via USB, direct VISA GPIB (e.g. via NI GPIB-USB-HS adapter), or a Prologix Ethernet GPIB adapter. Uses continuous buffered measurement mode — the instrument measures autonomously and accumulates results in an internal buffer. Each `read()` call drains everything that has accumulated since the last call, which may be zero or more readings depending on timing relative to the gate time.
 
 VISA resource address formats:
 ```
 USB0::0x14EB::0x0090::<serial>::INSTR   (direct USB)
 GPIB0::12::INSTR                         (via GPIB adapter, address set on instrument)
+```
+
+Prologix resource address formats:
+```
+prologix://192.168.1.50:1234/12          (host:port/gpib_address)
+PROLOGIX::192.168.1.50::12               (host/gpib_address, default port 1234)
+PROLOGIX::192.168.1.50::1234::12         (host/port/gpib_address)
 ```
 
 To confirm PyVISA can see your instrument before running the tool:
@@ -77,14 +84,14 @@ print(rm.list_resources())
 ## Usage
 
 ```
-python data_log.py --resource <VISA address> --run-name <name> [options]
+python data_log.py --resource <resource address> --run-name <name> [options]
 ```
 
 ### Arguments
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--resource` | Yes | — | VISA resource address of the instrument |
+| `--resource` | Yes | — | Instrument resource address (VISA or Prologix format, depending on instrument) |
 | `--run-name` | Yes | — | Name for this collection run |
 | `--gate-time` | No | `0.001` | Gate time in seconds |
 | `--num-samples` | No | — | Number of samples to collect. Omit to run indefinitely |
