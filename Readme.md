@@ -42,9 +42,13 @@ Console output is intentionally lightweight during runs: an in-place status line
 
 ## Supported Instruments
 
+For this workflow, a gap-free counter is strongly preferred. Gap-free operation means the instrument continuously measures and buffers results with little or no dead time between adjacent samples. Dead time introduces missing intervals and sampling bias, which can distort frequency stability metrics and reduce data quality for downstream analysis (especially Allan deviation work). If your goal is high-quality time-series frequency data, choose an instrument mode that is truly continuous and buffered.
+
 ### Rigol DG912 Pro
 
 Connected via Ethernet. Uses a single blocking `:COUNter:MEASure?` query per sample. Returns exactly one reading per call.
+
+Important: the DG912 Pro is **not** a gap-free counter in this mode. It performs discrete measurements per query with dead time between samples, so results will likely be poor for precision stability analysis and other gap-sensitive use cases. It can still be useful for basic monitoring or coarse trend tracking, but it is not recommended when gap-free acquisition is required.
 
 VISA resource address format:
 ```
