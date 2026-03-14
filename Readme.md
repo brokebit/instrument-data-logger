@@ -6,7 +6,7 @@ A Python command-line tool for polling a frequency counter over VISA, with suppo
 
 ## Features
 
-- Polls a frequency counter at a configurable gate time
+- Configures instrument gate time independently from reader polling cadence
 - Decouples instrument polling from persistence using two threads and a bounded queue
 - Supports multiple instruments via a common abstraction layer
 - Writes results to CSV, InfluxDB 1.x, or both simultaneously
@@ -22,7 +22,8 @@ For instruments connected via a National Instruments GPIB adapter (e.g. NI GPIB-
 data_log.py                      Entry point and threaded polling/writer pipeline
 instruments/
     base.py                  CounterReading and CounterInstrument abstract base class
-    dg912_pro.py             Rigol DG912 Pro implementation (USB)
+    dg912_pro.py             Rigol DG912 Pro implementation (TCP/IP)
+    keysight_53230a.py       Keysight 53230A implementation (TCP/IP)
     cnt90.py                 Pendulum CNT-90 implementation (USB or GPIB)
 writers/
     base.py                  DataWriter abstract base class
@@ -35,7 +36,7 @@ writers/
 
 `data_log.py` runs two worker threads connected by a bounded in-memory queue:
 
-- Reader thread: polls the instrument on gate-time cadence and pushes readings into the queue
+- Reader thread: polls the instrument on polling-interval cadence and pushes readings into the queue
 - Writer thread: consumes queued readings and fans writes to one or more configured writers
 
 This decoupling allows instrument acquisition to continue while slower storage backends (for example networked InfluxDB writes) catch up.
@@ -51,6 +52,25 @@ For this workflow, a gap-free counter is strongly preferred. Gap-free operation 
 Connected via Ethernet. Uses a single blocking `:COUNter:MEASure?` query per sample. Returns exactly one reading per call.
 
 Important: the DG912 Pro is **not** a gap-free counter in this mode. It performs discrete measurements per query with dead time between samples, so results will likely be poor for precision stability analysis and other gap-sensitive use cases. It can still be useful for basic monitoring or coarse trend tracking, but it is not recommended when gap-free acquisition is required.
+
+VISA resource address format:
+```
+TCPIP0::192.168.100.217::inst0::INSTR
+```
+
+### Keysight 53230A
+
+Connected via Ethernet. Uses continuous buffered measurement mode and drains the current buffer with `R?`, so each `read()` call may return zero, one, or many readings depending on timing relative to the gate time and polling interval.
+
+This implementation configures:
+
+- `CONF:FREQ 1.0E7` on channel 1, assuming an input near 10 MHz
+- `FREQ:GATE:SOUR TIME` and `FREQ:GATE:TIME` for fixed time-based gating
+- `FREQ:MODE CONT` for continuous acquisition
+- `SAMP:COUN` from `--num-samples`, with a maximum of `1000000`
+- `TRIG:SOUR IMM`, then `INIT` to start filling the buffer
+
+For this driver, `--num-samples` is required and must be `<= 1000000`.
 
 VISA resource address format:
 ```
@@ -86,20 +106,26 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 |---|---|---|---|
 | `--resource` | Yes | — | VISA resource address of the instrument |
 | `--run-name` | Yes | — | Name for this collection run |
+| `--instrument` | No | `dg912-pro` | Instrument driver to use: `cnt90`, `dg912-pro`, or `keysight-53230a` |
 | `--gate-time` | No | `0.001` | Gate time in seconds |
-| `--num-samples` | No | — | Number of samples to collect. Omit to run indefinitely |
+| `--polling-interval` | No | Same as `--gate-time` | Reader loop polling interval in seconds |
+| `--num-samples` | No | — | Number of samples to collect. Omit to run indefinitely, except for `keysight-53230a` |
 | `--output-csv` | No | — | Path to a CSV file to write results to |
 | `--output-influx` | No | — | InfluxDB target as `host:port:database` |
 | `--queue-size` | No | `10000` | Maximum queued samples buffered between reader and writer threads |
+
+`--gate-time` is still used to configure the instrument and is what gets recorded by the writers. `--polling-interval` only controls how often the reader thread calls `read()`.
 
 ### Examples
 
 Collect 100 samples from a DG912 Pro at 100 ms gate time, writing to CSV:
 ```bash
 python data_log.py \
-    --resource "USB0::0x1AB1::0x0641::DG9A1234::INSTR" \
+    --instrument dg912-pro \
+    --resource "TCPIP0::192.168.100.217::inst0::INSTR" \
     --run-name "bench_test_01" \
     --gate-time 0.1 \
+    --polling-interval 0.25 \
     --num-samples 100 \
     --output-csv results.csv
 ```
@@ -107,15 +133,29 @@ python data_log.py \
 Collect indefinitely from a CNT-90 via GPIB, writing to InfluxDB:
 ```bash
 python data_log.py \
+    --instrument cnt90 \
     --resource "GPIB0::12::INSTR" \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
     --output-influx influx_host:8086:samples_db
 ```
 
+Collect from a Keysight 53230A over TCP/IP, using 100 ms gate time and 250 ms polling:
+```bash
+python data_log.py \
+    --instrument keysight-53230a \
+    --resource "TCPIP0::192.168.100.217::inst0::INSTR" \
+    --run-name "keysight_run_01" \
+    --gate-time 0.1 \
+    --polling-interval 0.25 \
+    --num-samples 1000 \
+    --output-csv results.csv
+```
+
 Write to both CSV and InfluxDB simultaneously:
 ```bash
 python data_log.py \
+    --instrument cnt90 \
     --resource "GPIB0::12::INSTR" \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
@@ -139,6 +179,8 @@ Columns written to the CSV file:
 
 The file is opened in append mode. Multiple runs can share the same file and are distinguished by `run_name`.
 
+`frequency_hz` in CSV is written from the instrument's original text value, so decimal precision is preserved as returned by the instrument.
+
 ### InfluxDB
 
 Measurement name: `frequency_counter`
@@ -156,6 +198,8 @@ CREATE DATABASE samples_db
 ```
 
 SSL is enabled with certificate verification disabled, matching a typical local self-hosted deployment with a self-signed certificate. Authentication is not required.
+
+InfluxDB stores `frequency_hz` as a floating-point value, so it will not preserve arbitrary decimal precision beyond `float64`.
 
 #### Querying a run
 
@@ -182,11 +226,11 @@ curl -G "https://influx_host:8086/query" \
 
 Create a new file in `instruments/` that subclasses `CounterInstrument` from `instruments/base.py` and implements three methods:
 
-- `init(resource_address, gate_time_seconds)` — open the VISA connection and configure the instrument
+- `init(resource_address, gate_time_seconds, num_samples=None)` — open the VISA connection and configure the instrument
 - `read()` — return a `list` of `CounterReading` objects (one per measurement in the current poll)
 - `close()` — stop the instrument and close the VISA connection
 
-Then update the import and instantiation in `data_log.py`.
+Then register the new class in `SUPPORTED_INSTRUMENTS` in `data_log.py`.
 
 ## Adding a Writer
 

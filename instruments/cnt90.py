@@ -32,6 +32,7 @@ Relevant SCPI commands used here:
     :FETCh:ARRay? MAX               Drain all buffered frequency results
 """
 
+from decimal import Decimal
 import pyvisa
 from instruments.base import CounterInstrument, CounterReading
 
@@ -42,7 +43,7 @@ class CNT90(CounterInstrument):
         self._resource_manager = None
         self._instrument = None
 
-    def init(self, resource_address, gate_time_seconds):
+    def init(self, resource_address, gate_time_seconds, num_samples=None):
         self._resource_manager = pyvisa.ResourceManager()
 
         self._instrument = self._resource_manager.open_resource(resource_address)
@@ -69,7 +70,14 @@ class CNT90(CounterInstrument):
         frequency_values = raw_frequencies.split(",")
 
         for frequency_string in frequency_values:
-            reading = CounterReading(frequency=float(frequency_string))
+            frequency_string = frequency_string.strip()
+            if frequency_string == "":
+                continue
+
+            reading = CounterReading(
+                frequency=Decimal(frequency_string),
+                frequency_text=frequency_string
+            )
             readings.append(reading)
 
         return readings

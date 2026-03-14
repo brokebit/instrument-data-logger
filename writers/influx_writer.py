@@ -75,7 +75,7 @@ class InfluxWriter(DataWriter):
                 "run_name": run_name
             },
             "fields": {
-                "frequency_hz":  reading.frequency,
+                "frequency_hz":  float(reading.frequency),
                 "gate_time_ms":  gate_time_ms,
                 "sample_number": sample_number
             }

@@ -6,6 +6,7 @@ SCPI command reference: DG800 Pro / DG900 Pro Series Programming Guide
     :COUNter:MEASure?           Query frequency, period, duty cycle, +width, -width
 """
 
+from decimal import Decimal
 import pyvisa
 from instruments.base import CounterInstrument, CounterReading
 
@@ -16,7 +17,7 @@ class DG912Pro(CounterInstrument):
         self._resource_manager = None
         self._instrument = None
 
-    def init(self, resource_address, gate_time_seconds):
+    def init(self, resource_address, gate_time_seconds, num_samples=None):
         self._resource_manager = pyvisa.ResourceManager()
 
         self._instrument = self._resource_manager.open_resource(resource_address)
@@ -36,9 +37,10 @@ class DG912Pro(CounterInstrument):
 
         raw_values = result.split(",")
 
-        frequency = float(raw_values[0])
+        frequency_string = raw_values[0].strip()
+        frequency = Decimal(frequency_string)
 
-        return [CounterReading(frequency=frequency)]
+        return [CounterReading(frequency=frequency, frequency_text=frequency_string)]
 
     def close(self):
         if self._instrument is not None:
