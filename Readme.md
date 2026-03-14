@@ -19,14 +19,18 @@ For instruments connected via a National Instruments GPIB adapter (e.g. NI GPIB-
 ## Project Structure
 
 ```
-data_log.py                      Entry point and threaded polling/writer pipeline
+data_log.py                      Thin entry point
+cli.py                           CLI parsing and run configuration
+pipeline.py                      Reader/writer threads and queue orchestration
 instruments/
     base.py                  CounterReading and CounterInstrument abstract base class
+    registry.py              Instrument registry and factory
     dg912_pro.py             Rigol DG912 Pro implementation (TCP/IP)
     keysight_53230a.py       Keysight 53230A implementation (TCP/IP)
     cnt90.py                 Pendulum CNT-90 implementation (USB or GPIB)
 writers/
     base.py                  DataWriter abstract base class
+    factory.py               Writer construction from CLI config
     csv_writer.py            Writes readings to a CSV file
     influx_writer.py         Writes readings to InfluxDB 1.x
     composite_writer.py      Fans out writes to multiple writers simultaneously
@@ -34,7 +38,7 @@ writers/
 
 ## Runtime Architecture
 
-`data_log.py` runs two worker threads connected by a bounded in-memory queue:
+`pipeline.py` runs two worker threads connected by a bounded in-memory queue:
 
 - Reader thread: polls the instrument on polling-interval cadence and pushes readings into the queue
 - Writer thread: consumes queued readings and fans writes to one or more configured writers
@@ -234,7 +238,7 @@ Create a new file in `instruments/` that subclasses `CounterInstrument` from `in
 - `read()` — return a `list` of `CounterReading` objects (one per measurement in the current poll)
 - `close()` — stop the instrument and close the VISA connection
 
-Then register the new class in `SUPPORTED_INSTRUMENTS` in `data_log.py`.
+Then register the new class in `SUPPORTED_INSTRUMENTS` in `instruments/registry.py`.
 
 ## Adding a Writer
 
@@ -244,7 +248,7 @@ Create a new file in `writers/` that subclasses `DataWriter` from `writers/base.
 - `write(reading, sample_number, run_name, gate_time_seconds)` — persist one reading
 - `close()` — flush and close
 
-Add instantiation of the new writer inside `build_writer()` in `data_log.py`. `CompositeWriter` will fan out to it automatically alongside any other active writers.
+Add instantiation of the new writer inside `build_writer()` in `writers/factory.py`. `CompositeWriter` will fan out to it automatically alongside any other active writers.
 
 ## Allan Deviation Analysis
 
