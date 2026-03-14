@@ -21,6 +21,8 @@ import time
 import pyvisa
 from instruments.base import CounterInstrument, CounterReading
 
+MAX_SAMPLE_COUNT = 1000000
+
 
 class Keysight53230A(CounterInstrument):
 
@@ -32,6 +34,11 @@ class Keysight53230A(CounterInstrument):
     def init(self, resource_address, gate_time_seconds, num_samples=None):
         if num_samples is None:
             raise RuntimeError("Keysight 53230A requires --num-samples.")
+        if num_samples > MAX_SAMPLE_COUNT:
+            raise RuntimeError(
+                "Keysight 53230A does not support --num-samples greater than "
+                + str(MAX_SAMPLE_COUNT) + "."
+            )
 
         self._resource_manager = pyvisa.ResourceManager()
 
