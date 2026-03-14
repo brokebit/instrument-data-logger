@@ -52,7 +52,7 @@ class CSVWriter(DataWriter):
             sample_number,
             run_name,
             gate_time_ms,
-            reading.frequency
+            reading.frequency_text
         ])
 
         # Flush after every row so data is not lost if the script is

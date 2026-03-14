@@ -1,8 +1,7 @@
 """
 Frequency counter polling script.
 
-To use a different instrument, change the import and instantiation below.
-Everything else stays the same.
+Select the active instrument with --instrument.
 
 Requirements:
     pip install pyvisa pyvisa-py
@@ -11,38 +10,67 @@ For USB connections you may also need:
     pip install pyusb
 
 Usage:
-    python main.py --resource <VISA address> --run-name <name> [options]
+    python data_log.py --resource <VISA address> --run-name <name> [options]
 
+    --instrument    Instrument type (default: dg912-pro)
     --resource      VISA resource address of the instrument (required)
     --run-name      Name for this sample run (required)
     --gate-time     Gate time in seconds (default: 0.001)
+    --polling-interval
+                    Polling interval in seconds (default: same as gate time)
     --num-samples   Number of samples to collect. Omit to run indefinitely.
     --output-csv    Path to a CSV file to write results to (optional)
     --output-influx InfluxDB target as host:port:database (optional)
 
 Example:
-    python main.py --resource "USB0::0x1AB1::0x0641::DG9A1234::INSTR" \
-                   --run-name "bench_test_01" \
-                   --gate-time 0.1 \
-                   --num-samples 50 \
-                   --output-csv results.csv \
-                   --output-influx influx_host:8086:samples_db
+    python data_log.py --instrument keysight-53230a \
+                       --resource "TCPIP0::192.168.100.217::inst0::INSTR" \
+                       --run-name "bench_test_01" \
+                       --gate-time 0.1 \
+                       --polling-interval 0.25 \
+                       --num-samples 50 \
+                       --output-csv results.csv \
+                       --output-influx influx_host:8086:samples_db
 """
 
 import argparse
 import queue
 import threading
 import time
+from instruments.cnt90 import CNT90
 from instruments.dg912_pro import DG912Pro
+from instruments.keysight_53230a import Keysight53230A
 from writers.csv_writer import CSVWriter
 from writers.composite_writer import CompositeWriter
 from writers.influx_writer import InfluxWriter
 
 
-def display_status(sample_number, queue_depth, queue_capacity):
+SUPPORTED_INSTRUMENTS = {
+    "cnt90": CNT90,
+    "dg912-pro": DG912Pro,
+    "keysight-53230a": Keysight53230A,
+}
+
+KEYSIGHT_53230A_MAX_SAMPLES = 1000000
+
+
+def display_status(sample_number, num_samples, queue_depth, queue_capacity):
+    if num_samples is None:
+        sample_status = str(sample_number)
+    else:
+        sample_percent = (sample_number / num_samples) * 100.0
+        sample_status = (
+            str(sample_number)
+            + "/" + str(num_samples)
+            + " (" + f"{sample_percent:.1f}" + "%)"
+        )
+
+    queue_percent = (queue_depth / queue_capacity) * 100.0
+
     print(
-        "\rSample: " + str(sample_number)
-        + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity),
+        "\rSample: " + sample_status
+        + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity)
+        + " (" + f"{queue_percent:.1f}" + "%)",
         end="",
         flush=True
     )
@@ -71,10 +99,29 @@ def build_writer(args):
     return CompositeWriter(writers)
 
 
+def build_instrument(instrument_name):
+    instrument_class = SUPPORTED_INSTRUMENTS[instrument_name]
+    return instrument_class()
+
+
+def validate_args(args):
+    if args.instrument != "keysight-53230a":
+        return
+
+    if args.num_samples is None:
+        raise RuntimeError("The keysight-53230a instrument requires --num-samples.")
+
+    if args.num_samples > KEYSIGHT_53230A_MAX_SAMPLES:
+        raise RuntimeError(
+            "The keysight-53230a instrument does not support --num-samples "
+            + "greater than " + str(KEYSIGHT_53230A_MAX_SAMPLES) + "."
+        )
+
+
 def read_instrument_loop(
     instrument,
     readings_queue,
-    gate_time_seconds,
+    polling_interval_seconds,
     num_samples,
     stop_event,
     reader_done_event,
@@ -124,7 +171,7 @@ def read_instrument_loop(
 
                 sample_number = sample_number + 1
 
-            next_poll_time = next_poll_time + gate_time_seconds
+            next_poll_time = next_poll_time + polling_interval_seconds
             if next_poll_time < time.monotonic():
                 next_poll_time = time.monotonic()
 
@@ -147,6 +194,7 @@ def write_loop(
     readings_queue,
     run_name,
     gate_time_seconds,
+    num_samples,
     stop_event,
     reader_done_event,
     error_queue
@@ -167,6 +215,7 @@ def write_loop(
                 if last_sample_number > 0 and current_time >= next_status_time:
                     display_status(
                         last_sample_number,
+                        num_samples,
                         readings_queue.qsize(),
                         readings_queue.maxsize
                     )
@@ -182,6 +231,7 @@ def write_loop(
                 if current_time >= next_status_time:
                     display_status(
                         sample_number,
+                        num_samples,
                         readings_queue.qsize(),
                         readings_queue.maxsize
                     )
@@ -203,6 +253,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Frequency counter polling script.")
 
     parser.add_argument(
+        "--instrument",
+        type=str,
+        default="dg912-pro",
+        choices=sorted(SUPPORTED_INSTRUMENTS.keys()),
+        help="Instrument type to use (default: dg912-pro)."
+    )
+    parser.add_argument(
         "--resource",
         type=str,
         required=True,
@@ -221,10 +278,19 @@ def parse_args():
         help="Gate time in seconds (default: 0.001)."
     )
     parser.add_argument(
+        "--polling-interval",
+        type=float,
+        default=None,
+        help="Polling interval in seconds (default: same as gate time)."
+    )
+    parser.add_argument(
         "--num-samples",
         type=int,
         default=None,
-        help="Number of samples to collect. Omit to run indefinitely."
+        help=(
+            "Number of samples to collect. Omit to run indefinitely, "
+            + "except for keysight-53230a."
+        )
     )
     parser.add_argument(
         "--output-csv",
@@ -253,13 +319,24 @@ def parse_args():
 def main():
     args = parse_args()
 
+    try:
+        validate_args(args)
+    except RuntimeError as error:
+        print("Error: " + str(error))
+        return
+
+    instrument_name    = args.instrument
     resource_address  = args.resource
     run_name          = args.run_name
     gate_time_seconds = args.gate_time
+    if args.polling_interval is None:
+        polling_interval_seconds = gate_time_seconds
+    else:
+        polling_interval_seconds = args.polling_interval
     num_samples       = args.num_samples
     queue_size        = args.queue_size
 
-    instrument = DG912Pro()
+    instrument = build_instrument(instrument_name)
 
     try:
         writer = build_writer(args)
@@ -269,13 +346,15 @@ def main():
 
     print("Connecting to  : " + resource_address)
     try:
-        instrument.init(resource_address, gate_time_seconds)
+        instrument.init(resource_address, gate_time_seconds, num_samples)
     except Exception as error:
         writer.close()
         print("Error: " + str(error))
         return
+    print("Instrument     : " + instrument_name)
     print("Run name       : " + run_name)
     print("Gate time      : " + str(gate_time_seconds * 1000) + " ms")
+    print("Polling interval: " + str(polling_interval_seconds * 1000) + " ms")
     if num_samples is not None:
         print("Collecting     : " + str(num_samples) + " samples")
     else:
@@ -298,7 +377,7 @@ def main():
         args=(
             instrument,
             readings_queue,
-            gate_time_seconds,
+            polling_interval_seconds,
             num_samples,
             stop_event,
             reader_done_event,
@@ -315,6 +394,7 @@ def main():
             readings_queue,
             run_name,
             gate_time_seconds,
+            num_samples,
             stop_event,
             reader_done_event,
             error_queue,
