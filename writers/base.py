@@ -22,6 +22,14 @@ class DataWriter(abc.ABC):
         """
         pass
 
+    def flush(self):
+        """
+        Flush any buffered writes.
+
+        Unbuffered writers can inherit this no-op implementation.
+        """
+        pass
+
     @abc.abstractmethod
     def close(self):
         """
