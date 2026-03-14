@@ -23,6 +23,10 @@ class CompositeWriter(DataWriter):
         for writer in self._writers:
             writer.write(reading, sample_number, run_name, gate_time_seconds)
 
+    def flush(self):
+        for writer in self._writers:
+            writer.flush()
+
     def close(self):
         for writer in self._writers:
             writer.close()

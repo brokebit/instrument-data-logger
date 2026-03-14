@@ -52,6 +52,8 @@ SUPPORTED_INSTRUMENTS = {
 }
 
 KEYSIGHT_53230A_MAX_SAMPLES = 1000000
+DEFAULT_INFLUX_BATCH_SIZE = 500
+DEFAULT_INFLUX_FLUSH_INTERVAL_SECONDS = 1.0
 
 
 def display_status(sample_number, num_samples, queue_depth, queue_capacity):
@@ -92,7 +94,13 @@ def build_writer(args):
         port     = int(parts[1])
         database = parts[2]
 
-        influx_writer = InfluxWriter(host, port, database)
+        influx_writer = InfluxWriter(
+            host,
+            port,
+            database,
+            batch_size=args.influx_batch_size,
+            flush_interval_seconds=args.influx_flush_interval,
+        )
         influx_writer.open()
         writers.append(influx_writer)
 
@@ -105,6 +113,12 @@ def build_instrument(instrument_name):
 
 
 def validate_args(args):
+    if args.influx_batch_size <= 0:
+        raise RuntimeError("--influx-batch-size must be greater than 0.")
+
+    if args.influx_flush_interval <= 0:
+        raise RuntimeError("--influx-flush-interval must be greater than 0.")
+
     if args.instrument != "keysight-53230a":
         return
 
@@ -211,6 +225,7 @@ def write_loop(
             try:
                 reading, sample_number = readings_queue.get(timeout=0.1)
             except queue.Empty:
+                writer.flush()
                 current_time = time.monotonic()
                 if last_sample_number > 0 and current_time >= next_status_time:
                     display_status(
@@ -305,6 +320,24 @@ def parse_args():
         default=None,
         help="InfluxDB target as host:port:database (e.g. influx_host:8086:samples_db)."
     )
+    parser.add_argument(
+        "--influx-batch-size",
+        type=int,
+        default=DEFAULT_INFLUX_BATCH_SIZE,
+        help=(
+            "Number of points to buffer before writing to InfluxDB "
+            + "(default: " + str(DEFAULT_INFLUX_BATCH_SIZE) + ")."
+        )
+    )
+    parser.add_argument(
+        "--influx-flush-interval",
+        type=float,
+        default=DEFAULT_INFLUX_FLUSH_INTERVAL_SECONDS,
+        help=(
+            "Maximum seconds to hold buffered InfluxDB points before flushing "
+            + "(default: " + str(DEFAULT_INFLUX_FLUSH_INTERVAL_SECONDS) + ")."
+        )
+    )
 
     parser.add_argument(
         "--queue-size",
@@ -363,6 +396,13 @@ def main():
         print("CSV output     : " + args.output_csv)
     if args.output_influx is not None:
         print("InfluxDB output: " + args.output_influx)
+        print(
+            "Influx batching: "
+            + str(args.influx_batch_size)
+            + " points / "
+            + str(args.influx_flush_interval)
+            + " s"
+        )
     print("Queue size     : " + str(queue_size))
     print()
 

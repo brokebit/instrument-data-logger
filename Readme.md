@@ -112,6 +112,8 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 | `--num-samples` | No | — | Number of samples to collect. Omit to run indefinitely, except for `keysight-53230a` |
 | `--output-csv` | No | — | Path to a CSV file to write results to |
 | `--output-influx` | No | — | InfluxDB target as `host:port:database` |
+| `--influx-batch-size` | No | `500` | Number of points to buffer before writing to InfluxDB |
+| `--influx-flush-interval` | No | `1.0` | Maximum seconds to hold buffered InfluxDB points before flushing |
 | `--queue-size` | No | `10000` | Maximum queued samples buffered between reader and writer threads |
 
 `--gate-time` is still used to configure the instrument and is what gets recorded by the writers. `--polling-interval` only controls how often the reader thread calls `read()`.
@@ -137,6 +139,8 @@ python data_log.py \
     --resource "GPIB0::12::INSTR" \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
+    --influx-batch-size 500 \
+    --influx-flush-interval 1.0 \
     --output-influx influx_host:8086:samples_db
 ```
 
