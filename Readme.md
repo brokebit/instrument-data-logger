@@ -10,7 +10,7 @@ A Python command-line tool for polling a frequency counter over VISA, with suppo
 - Decouples instrument polling from persistence using two threads and a bounded queue
 - Supports multiple instruments via a common abstraction layer
 - Writes results to CSV, InfluxDB 1.x, or both simultaneously
-- Prints a once-per-second progress status (latest sample number and queue depth)
+- Supports either a plain console status line or a Textual dashboard UI
 - Stops cleanly on Ctrl+C or after a fixed number of samples
 
 
@@ -21,7 +21,10 @@ For instruments connected via a National Instruments GPIB adapter (e.g. NI GPIB-
 ```
 data_log.py                      Thin entry point
 cli.py                           CLI parsing and run configuration
+session.py                       Shared run setup, execution, and cleanup
 pipeline.py                      Reader/writer threads and queue orchestration
+reporting.py                     Output/reporting abstraction and reporter implementations
+textual_ui.py                    Optional Textual dashboard frontend
 instruments/
     base.py                  CounterReading and CounterInstrument abstract base class
     registry.py              Instrument registry and factory
@@ -45,7 +48,7 @@ writers/
 
 This decoupling allows instrument acquisition to continue while slower storage backends (for example networked InfluxDB writes) catch up.
 
-Console output is intentionally lightweight during runs: an in-place status line is updated once per second with the latest processed sample number and queue depth.
+The runtime is frontend-agnostic. `reporting.py` receives structured run updates from the pipeline, and either renders them as a lightweight console status line or exposes them to the optional Textual dashboard.
 
 ## Supported Instruments
 
@@ -110,6 +113,7 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 |---|---|---|---|
 | `--resource` | Yes | — | VISA resource address of the instrument |
 | `--run-name` | Yes | — | Name for this collection run |
+| `--ui` | No | `plain` | UI mode: `plain` or `textual` |
 | `--instrument` | No | `dg912-pro` | Instrument driver to use: `cnt90`, `dg912-pro`, or `keysight-53230a` |
 | `--gate-time` | No | `0.001` | Gate time in seconds |
 | `--polling-interval` | No | Same as `--gate-time` | Reader loop polling interval in seconds |
@@ -121,6 +125,8 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 | `--queue-size` | No | `10000` | Maximum queued samples buffered between reader and writer threads |
 
 `--gate-time` is still used to configure the instrument and is what gets recorded by the writers. `--polling-interval` only controls how often the reader thread calls `read()`.
+
+Use `--ui textual` to launch the interactive dashboard. This mode requires the `textual` dependency from `requirements.txt`.
 
 ### Examples
 
@@ -168,6 +174,19 @@ python data_log.py \
     --run-name "stability_run_01" \
     --gate-time 1.0 \
     --output-csv results.csv \
+    --output-influx influx_host:8086:samples_db
+```
+
+Run the Textual dashboard UI:
+```bash
+python data_log.py \
+    --ui textual \
+    --instrument keysight-53230a \
+    --resource "TCPIP0::192.168.100.217::inst0::INSTR" \
+    --run-name "keysight_dashboard_01" \
+    --gate-time 0.1 \
+    --polling-interval 0.25 \
+    --num-samples 1000 \
     --output-influx influx_host:8086:samples_db
 ```
 
