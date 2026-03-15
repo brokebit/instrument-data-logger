@@ -4,6 +4,12 @@
 
 A Python command-line tool for polling a frequency counter over VISA, with support for multiple instruments and configurable output destinations.
 
+## Screenshot
+
+Textual dashboard during an active logging session:
+
+![Instrument Data Logger screenshot](instrument_data_logger.png)
+
 ## Features
 
 - Configures instrument gate time independently from reader polling cadence
