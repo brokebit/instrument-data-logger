@@ -337,6 +337,5 @@ taus, adev, errors, ns = allantools.oadev(
 ```
 
 ## TODO
-- Improved UI using https://textual.textualize.io/
 - Think about ways to implement logging of data types other than frequency
-- Update the CNT-90 instrment code to use the Prologix Ethernet GPIB adapter
+- Update the CNT-90 instrment code to use the Prologix Ethernet GPIB adapter (this is a mess)
