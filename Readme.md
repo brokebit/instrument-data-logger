@@ -1,8 +1,14 @@
 # Frequency Counter Polling Tool
 
-99% of this code has been writen by either Claude Sonnet 4.6 or OpenAI Codex GPT 3.5. 
+99% of this code has been writen by either Claude Sonnet 4.6 or OpenAI Codex GPT 5.3. 
 
 A Python command-line tool for polling a frequency counter over VISA, with support for multiple instruments and configurable output destinations.
+
+## Screenshot
+
+Textual dashboard during an active logging session:
+
+![Instrument Data Logger screenshot](instrument_data_logger.png)
 
 ## Features
 
@@ -10,6 +16,7 @@ A Python command-line tool for polling a frequency counter over VISA, with suppo
 - Decouples instrument polling from persistence using two threads and a bounded queue
 - Supports multiple instruments via a common abstraction layer
 - Writes results to CSV, InfluxDB 1.x, or both simultaneously
+- Supports loading run parameters from a YAML config file with `--config`
 - Supports either a plain console status line or a Textual dashboard UI
 - Stops cleanly on Ctrl+C or after a fixed number of samples
 
@@ -105,12 +112,14 @@ print(rm.list_resources())
 
 ```
 python data_log.py --resource <VISA address> --run-name <name> [options]
+python data_log.py --config run.yaml
 ```
 
 ### Arguments
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
+| `--config` | No | — | Path to a YAML config file. When used, do not pass any other run arguments |
 | `--resource` | Yes | — | VISA resource address of the instrument |
 | `--run-name` | Yes | — | Name for this collection run |
 | `--ui` | No | `plain` | UI mode: `plain` or `textual` |
@@ -127,6 +136,42 @@ python data_log.py --resource <VISA address> --run-name <name> [options]
 `--gate-time` is still used to configure the instrument and is what gets recorded by the writers. `--polling-interval` only controls how often the reader thread calls `read()`.
 
 Use `--ui textual` to launch the interactive dashboard. This mode requires the `textual` dependency from `requirements.txt`.
+
+### YAML Config Files
+
+Use `--config <file>` to load all run parameters from a YAML file instead of the CLI. In this mode, `--config` must be the only CLI argument.
+
+Config keys match the long CLI option names without the leading `--`. Both hyphenated and underscored forms are accepted, so `run-name` and `run_name` are equivalent.
+
+Required values still apply in config mode:
+
+- `resource` and `run_name` are always required
+- `num_samples` is still required for `keysight-53230a`
+
+If `output_csv` is a relative path in the YAML file, it is resolved relative to the config file's directory.
+
+Example:
+
+```yaml
+ui: plain
+instrument: keysight-53230a
+resource: TCPIP0::192.168.100.217::inst0::INSTR
+run_name: keysight_run_01
+gate_time: 0.1
+polling_interval: 0.25
+num_samples: 1000
+output_csv: results.csv
+output_influx: influx_host:8086:samples_db
+influx_batch_size: 500
+influx_flush_interval: 1.0
+queue_size: 10000
+```
+
+Run it with:
+
+```bash
+python data_log.py --config runs/keysight_run.yaml
+```
 
 ### Examples
 
@@ -298,6 +343,5 @@ taus, adev, errors, ns = allantools.oadev(
 ```
 
 ## TODO
-- Improved UI using https://textual.textualize.io/
 - Think about ways to implement logging of data types other than frequency
-- Update the CNT-90 instrment code to use the Prologix Ethernet GPIB adapter
+- Update the CNT-90 instrment code to use the Prologix Ethernet GPIB adapter (this is a mess)
