@@ -3,35 +3,6 @@ import threading
 import time
 
 
-def display_status(sample_number, num_samples, queue_depth, queue_capacity, previous_width):
-    if num_samples is None:
-        sample_status = str(sample_number)
-    else:
-        sample_percent = (sample_number / num_samples) * 100.0
-        sample_status = (
-            str(sample_number)
-            + "/" + str(num_samples)
-            + " (" + f"{sample_percent:.1f}" + "%)"
-        )
-
-    queue_percent = (queue_depth / queue_capacity) * 100.0
-    status_text = (
-        "Sample: " + sample_status
-        + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity)
-        + " (" + f"{queue_percent:.1f}" + "%)"
-    )
-    padding = ""
-    if len(status_text) < previous_width:
-        padding = " " * (previous_width - len(status_text))
-
-    print(
-        "\r" + status_text + padding,
-        end="",
-        flush=True
-    )
-    return len(status_text)
-
-
 def read_instrument_loop(
     instrument,
     readings_queue,
@@ -40,7 +11,8 @@ def read_instrument_loop(
     stop_event,
     reader_done_event,
     num_samples_reached_event,
-    error_queue
+    error_queue,
+    reporter
 ):
     sample_number = 1
     next_poll_time = time.monotonic()
@@ -96,11 +68,7 @@ def read_instrument_loop(
 
     finally:
         reader_done_event.set()
-        print(
-            "\nInstrument read loop finished. "
-            + "Samples queued: " + str(sample_number - 1)
-            + ". Reason: " + exit_reason + "."
-        )
+        reporter.show_reader_finished(sample_number - 1, exit_reason)
 
 
 def write_loop(
@@ -111,12 +79,12 @@ def write_loop(
     num_samples,
     stop_event,
     reader_done_event,
-    error_queue
+    error_queue,
+    reporter
 ):
     next_status_time = time.monotonic() + 1.0
     last_sample_number = 0
-    status_line_active = False
-    status_line_width = 0
+    latest_frequency_text = None
 
     try:
         while True:
@@ -129,31 +97,30 @@ def write_loop(
                 writer.flush()
                 current_time = time.monotonic()
                 if last_sample_number > 0 and current_time >= next_status_time:
-                    status_line_width = display_status(
+                    reporter.show_status(
                         last_sample_number,
                         num_samples,
                         readings_queue.qsize(),
                         readings_queue.maxsize,
-                        status_line_width
+                        latest_frequency_text=latest_frequency_text
                     )
-                    status_line_active = True
                     next_status_time = current_time + 1.0
                 continue
 
             try:
                 writer.write(reading, sample_number, run_name, gate_time_seconds)
                 last_sample_number = sample_number
+                latest_frequency_text = reading.frequency_text
 
                 current_time = time.monotonic()
                 if current_time >= next_status_time:
-                    status_line_width = display_status(
+                    reporter.show_status(
                         sample_number,
                         num_samples,
                         readings_queue.qsize(),
                         readings_queue.maxsize,
-                        status_line_width
+                        latest_frequency_text=latest_frequency_text
                     )
-                    status_line_active = True
                     next_status_time = current_time + 1.0
             finally:
                 readings_queue.task_done()
@@ -162,14 +129,11 @@ def write_loop(
         error_queue.put(("writer", error))
         stop_event.set()
 
-    finally:
-        if status_line_active:
-            print("")
 
-
-def run_pipeline(config, instrument, writer):
+def run_pipeline(config, instrument, writer, reporter, stop_event=None):
     readings_queue = queue.Queue(maxsize=config.queue_size)
-    stop_event = threading.Event()
+    if stop_event is None:
+        stop_event = threading.Event()
     reader_done_event = threading.Event()
     num_samples_reached_event = threading.Event()
     error_queue = queue.Queue()
@@ -185,6 +149,7 @@ def run_pipeline(config, instrument, writer):
             reader_done_event,
             num_samples_reached_event,
             error_queue,
+            reporter,
         ),
         name="instrument-reader"
     )
@@ -200,6 +165,7 @@ def run_pipeline(config, instrument, writer):
             stop_event,
             reader_done_event,
             error_queue,
+            reporter,
         ),
         name="data-writer"
     )
@@ -216,8 +182,7 @@ def run_pipeline(config, instrument, writer):
                 break
 
     except KeyboardInterrupt:
-        print("")
-        print("Polling stopped by user.")
+        reporter.show_polling_stopped_by_user()
         stop_event.set()
 
     finally:
@@ -227,7 +192,7 @@ def run_pipeline(config, instrument, writer):
 
         if not error_queue.empty():
             component, error = error_queue.get()
-            print("Error in " + component + " thread: " + str(error))
+            reporter.show_thread_error(component, error)
 
         if num_samples_reached_event.is_set():
-            print("Collected " + str(config.num_samples) + " samples. Done.")
+            reporter.show_samples_collected(config.num_samples)

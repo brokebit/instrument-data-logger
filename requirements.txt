@@ -12,6 +12,7 @@ PyVISA==1.16.2
 PyVISA-py==0.8.1
 requests==2.32.5
 six==1.17.0
+textual==7.5.0
 typing_extensions==4.15.0
 urllib3==2.6.3
 zeroconf==0.148.0

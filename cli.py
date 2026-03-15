@@ -11,6 +11,7 @@ DEFAULT_INFLUX_FLUSH_INTERVAL_SECONDS = 1.0
 
 @dataclass(frozen=True)
 class RunConfig:
+    ui_mode: str
     instrument_name: str
     resource_address: str
     run_name: str
@@ -33,6 +34,7 @@ def parse_run_config():
         polling_interval_seconds = args.polling_interval
 
     return RunConfig(
+        ui_mode=args.ui,
         instrument_name=args.instrument,
         resource_address=args.resource,
         run_name=args.run_name,
@@ -50,6 +52,13 @@ def parse_run_config():
 def _parse_args():
     parser = argparse.ArgumentParser(description="Frequency counter polling script.")
 
+    parser.add_argument(
+        "--ui",
+        type=str,
+        default="plain",
+        choices=["plain", "textual"],
+        help="User interface mode to use (default: plain)."
+    )
     parser.add_argument(
         "--instrument",
         type=str,
