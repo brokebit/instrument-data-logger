@@ -49,6 +49,8 @@ class Keysight53230A(CounterInstrument):
         setup_commands = [
             "*RST",
             "CONF:FREQ 1.0E7",
+            "INP:IMP 50",
+            "INP:LEV 0.0",
             "FREQ:GATE:SOUR TIME",
             "FREQ:GATE:TIME " + str(gate_time_seconds),
             "FREQ:MODE CONT",
