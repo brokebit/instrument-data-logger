@@ -4,7 +4,7 @@ resource: TCPIP0::192.168.100.83::inst0::INSTR
 run_name: "0x9A"
 gate_time: .13
 polling_interval: 1
-num_samples: 100
+num_samples: 10000
 event_log: events-0x9A.log
 output_csv: results-0x9A.csv
 output_influx: 192.168.100.12:8086:allan_db

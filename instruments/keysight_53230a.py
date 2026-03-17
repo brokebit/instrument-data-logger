@@ -3,6 +3,8 @@ Instrument implementation for the Keysight 53230A frequency counter.
 
 This implementation uses the instrument's continuous buffered frequency mode:
     - *RST resets the counter to a known state.
+    - SENS:ROSC:SOUR EXT selects the external reference input.
+    - *CAL? runs a calibration pass before measurement setup continues.
     - CONF:FREQ 1.0E7 configures a channel 1 frequency measurement with an
       expected input near 10 MHz.
     - FREQ:GATE:SOUR TIME and FREQ:GATE:TIME <seconds> enable fixed
@@ -22,6 +24,8 @@ import pyvisa
 from instruments.base import CounterInstrument, CounterReading
 
 MAX_SAMPLE_COUNT = 1000000
+_CALIBRATION_WAIT_SECONDS = 10.0
+_CALIBRATION_TIMEOUT_MILLISECONDS = 20000
 
 
 class Keysight53230A(CounterInstrument):
@@ -29,7 +33,7 @@ class Keysight53230A(CounterInstrument):
     def __init__(self):
         self._resource_manager = None
         self._instrument = None
-        self._command_delay_seconds = 0.1
+        self._command_delay_seconds = 0.5
 
     def init(self, resource_address, gate_time_seconds, num_samples=None):
         if num_samples is None:
@@ -46,9 +50,12 @@ class Keysight53230A(CounterInstrument):
         self._instrument.timeout = 5000
         self._instrument.chunk_size = 1024 * 1024
 
-        setup_commands = [
+        calibration_commands = [
             "*RST",
             "SENS:ROSC:SOUR EXT",
+            "*CAL?",
+        ]
+        setup_commands = [
             "CONF:FREQ 1.0E7",
             "INP:IMP 50",
             "INP:LEV 0.0",
@@ -60,14 +67,12 @@ class Keysight53230A(CounterInstrument):
             "INIT",
         ]
 
-        for index, command in enumerate(setup_commands):
-            self._instrument.write(command)
-
-            if index < len(setup_commands) - 1:
-                time.sleep(self._command_delay_seconds)
+        self._run_command_sequence(calibration_commands)
+        self._run_command_sequence(setup_commands)
 
     def read(self):
         raw_response = self._instrument.query("R?")
+        self._check_command_error("R?")
         payload = self._extract_payload(raw_response)
 
         if payload == "":
@@ -119,6 +124,62 @@ class Keysight53230A(CounterInstrument):
             raise RuntimeError("Incomplete block payload from Keysight 53230A.")
 
         return response[header_end:payload_end]
+
+    def _run_command_sequence(self, commands):
+        for index, command in enumerate(commands):
+            self._run_command(command)
+
+            if index < len(commands) - 1:
+                time.sleep(self._command_delay_seconds)
+
+    def _run_command(self, command):
+        if command == "*CAL?":
+            self._run_calibration()
+            return
+
+        self._instrument.write(command)
+        self._check_command_error(command)
+
+    def _run_calibration(self):
+        original_timeout = self._instrument.timeout
+        self._instrument.timeout = max(
+            original_timeout or 0,
+            _CALIBRATION_TIMEOUT_MILLISECONDS,
+        )
+
+        try:
+            self._instrument.write("*CAL?")
+            time.sleep(_CALIBRATION_WAIT_SECONDS)
+            self._instrument.read()
+            self._check_command_error("*CAL?")
+        finally:
+            self._instrument.timeout = original_timeout
+
+    def _check_command_error(self, command):
+        error_response = self._query_system_error()
+
+        if error_response == "":
+            raise RuntimeError(
+                "Keysight 53230A error query returned an empty response "
+                + "after command "
+                + command
+                + "."
+            )
+
+        error_code = error_response.split(",", 1)[0].strip()
+        if error_code in {"0", "+0"}:
+            return
+
+        raise RuntimeError(
+            "Keysight 53230A reported an error after command "
+            + command
+            + ": "
+            + error_response
+        )
+
+    def _query_system_error(self):
+        return self._instrument.query("SYST:ERR?").strip()
+
     def close(self):
         if self._instrument is not None:
             try:

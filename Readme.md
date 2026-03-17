@@ -78,11 +78,14 @@ Connected via Ethernet. Uses continuous buffered measurement mode and drains the
 
 This implementation configures:
 
+- `*RST`, `SENS:ROSC:SOUR EXT`, and `*CAL?` first, then waits about 10 seconds for calibration
 - `CONF:FREQ 1.0E7` on channel 1, assuming an input near 10 MHz
 - `FREQ:GATE:SOUR TIME` and `FREQ:GATE:TIME` for fixed time-based gating
 - `FREQ:MODE CONT` for continuous acquisition
 - `SAMP:COUN` from `--num-samples`, with a maximum of `1000000`
 - `TRIG:SOUR IMM`, then `INIT` to start filling the buffer
+- `SYST:ERR?` after each setup command, aborting the run if the counter reports any non-zero error
+- `SYST:ERR?` after each `R?`, aborting the run if the counter reports any non-zero read-side error
 
 For this driver, `--num-samples` is required and must be `<= 1000000`.
 
