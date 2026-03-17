@@ -49,7 +49,7 @@ class TextualDashboardApp(App):
     }
 
     #live-panel {
-        width: 2fr;
+        width: 1fr;
         margin: 0 1 0 0;
     }
 
@@ -273,6 +273,9 @@ class TextualDashboardApp(App):
         if self._config.output_csv is not None:
             lines.append("CSV output      : " + self._config.output_csv)
 
+        if self._config.event_log is not None:
+            lines.append("Event log       : " + self._config.event_log)
+
         if self._config.output_influx is not None:
             lines.append("Influx target   : " + self._config.output_influx)
             lines.append(
@@ -379,7 +382,11 @@ class TextualDashboardApp(App):
 
 
 def launch_textual_dashboard(config):
-    reporter = TextualReporter()
+    reporter = TextualReporter(config.event_log)
     app = TextualDashboardApp(config, reporter)
-    app.run()
-    app.shutdown_session()
+
+    try:
+        app.run()
+    finally:
+        app.shutdown_session()
+        reporter.close()

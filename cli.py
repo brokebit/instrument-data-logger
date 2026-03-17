@@ -26,6 +26,7 @@ DEFAULT_ARGUMENT_VALUES = {
     "polling_interval": None,
     "num_samples": None,
     "output_csv": None,
+    "event_log": None,
     "output_influx": None,
     "influx_batch_size": DEFAULT_INFLUX_BATCH_SIZE,
     "influx_flush_interval": DEFAULT_INFLUX_FLUSH_INTERVAL_SECONDS,
@@ -43,6 +44,7 @@ class RunConfig:
     polling_interval_seconds: float
     num_samples: Optional[int]
     output_csv: Optional[str]
+    event_log: Optional[str]
     output_influx: Optional[str]
     influx_batch_size: int
     influx_flush_interval_seconds: float
@@ -138,6 +140,12 @@ def _build_parser():
         type=str,
         default=None,
         help="Path to a CSV file to write results to."
+    )
+    parser.add_argument(
+        "--event-log",
+        type=str,
+        default=None,
+        help="Path to a log file that mirrors the Textual event stream."
     )
     parser.add_argument(
         "--output-influx",
@@ -236,6 +244,12 @@ def _load_config_values(config_path):
             normalized_values["output_csv"]
         )
 
+    if normalized_values.get("event_log") is not None:
+        normalized_values["event_log"] = _resolve_config_relative_path(
+            config_file.parent,
+            normalized_values["event_log"]
+        )
+
     return normalized_values
 
 
@@ -262,7 +276,7 @@ def _coerce_config_value(key, value):
     if key in {"ui", "instrument", "resource", "run_name"}:
         return _coerce_string_value(key, value, allow_none=False)
 
-    if key in {"output_csv", "output_influx"}:
+    if key in {"output_csv", "event_log", "output_influx"}:
         return _coerce_string_value(key, value, allow_none=True)
 
     if key in {"gate_time", "influx_flush_interval"}:
@@ -341,6 +355,7 @@ def _build_run_config(args):
         polling_interval_seconds=polling_interval_seconds,
         num_samples=args.num_samples,
         output_csv=args.output_csv,
+        event_log=args.event_log,
         output_influx=args.output_influx,
         influx_batch_size=args.influx_batch_size,
         influx_flush_interval_seconds=args.influx_flush_interval,
@@ -372,6 +387,9 @@ def _validate_args(args):
 
     if _is_missing_text(args.run_name):
         raise RuntimeError("Missing required value for --run-name.")
+
+    if args.event_log is not None and _is_missing_text(args.event_log):
+        raise RuntimeError("--event-log must not be empty.")
 
     if args.gate_time <= 0:
         raise RuntimeError("--gate-time must be greater than 0.")

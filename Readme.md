@@ -148,7 +148,7 @@ Required values still apply in config mode:
 - `resource` and `run_name` are always required
 - `num_samples` is still required for `keysight-53230a`
 
-If `output_csv` is a relative path in the YAML file, it is resolved relative to the config file's directory.
+If `output_csv` or `event_log` is a relative path in the YAML file, it is resolved relative to the config file's directory.
 
 Example:
 
@@ -161,6 +161,7 @@ gate_time: 0.1
 polling_interval: 0.25
 num_samples: 1000
 output_csv: results.csv
+event_log: events.log
 output_influx: influx_host:8086:samples_db
 influx_batch_size: 500
 influx_flush_interval: 1.0
@@ -232,6 +233,7 @@ python data_log.py \
     --gate-time 0.1 \
     --polling-interval 0.25 \
     --num-samples 1000 \
+    --event-log events.log \
     --output-influx influx_host:8086:samples_db
 ```
 

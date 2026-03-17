@@ -29,10 +29,22 @@ def main():
             )
             return
 
-        launch_textual_dashboard(config)
+        try:
+            launch_textual_dashboard(config)
+        except RuntimeError as error:
+            reporter.show_error(str(error))
         return
 
-    run_session(config, reporter)
+    try:
+        reporter = ConsoleReporter(config.event_log)
+    except RuntimeError as error:
+        ConsoleReporter().show_error(str(error))
+        return
+
+    try:
+        run_session(config, reporter)
+    finally:
+        reporter.close()
 
 
 if __name__ == "__main__":

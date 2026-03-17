@@ -1,11 +1,67 @@
 import abc
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 import threading
 import time
 
 
 _EVENT_HISTORY_LIMIT = 200
+
+
+def _current_event_timestamp():
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_event_message(message):
+    return "[" + _current_event_timestamp() + "] " + message
+
+
+def _build_run_label(instrument_name, run_name):
+    if instrument_name and run_name:
+        return instrument_name + " (" + run_name + ")"
+
+    if run_name:
+        return run_name
+
+    if instrument_name:
+        return instrument_name
+
+    return "run"
+
+
+class _EventLogFile:
+
+    def __init__(self, path):
+        self._handle = None
+        self._lock = threading.Lock()
+
+        if path is None:
+            return
+
+        try:
+            self._handle = Path(path).expanduser().open("a", encoding="utf-8")
+        except OSError as error:
+            raise RuntimeError(
+                "Unable to open event log file: " + str(path) + ". " + str(error)
+            ) from error
+
+    def write(self, message):
+        if self._handle is None:
+            return
+
+        with self._lock:
+            self._handle.write(message + "\n")
+            self._handle.flush()
+
+    def close(self):
+        with self._lock:
+            if self._handle is None:
+                return
+
+            self._handle.close()
+            self._handle = None
 
 
 @dataclass(frozen=True)
@@ -80,38 +136,56 @@ class Reporter(abc.ABC):
     def show_connection_closed(self):
         pass
 
+    def close(self):
+        pass
+
 
 class ConsoleReporter(Reporter):
 
-    def __init__(self):
+    def __init__(self, event_log_path=None):
+        self._lock = threading.Lock()
         self._status_line_active = False
         self._status_line_width = 0
+        self._event_log = _EventLogFile(event_log_path)
+        self._instrument_name = ""
+        self._run_name = ""
+        self._run_started = False
+        self._run_finished_logged = False
 
     def show_connecting(self, resource_address):
-        print("Connecting to  : " + resource_address)
+        with self._lock:
+            self._write_event("Connecting to " + resource_address)
+            print("Connecting to  : " + resource_address)
 
     def show_run_summary(self, config):
-        print("Instrument     : " + config.instrument_name)
-        print("Run name       : " + config.run_name)
-        print("Gate time      : " + str(config.gate_time_seconds * 1000) + " ms")
-        print("Polling interval: " + str(config.polling_interval_seconds * 1000) + " ms")
-        if config.num_samples is not None:
-            print("Collecting     : " + str(config.num_samples) + " samples")
-        else:
-            print("Collecting     : indefinitely (Ctrl+C to stop)")
-        if config.output_csv is not None:
-            print("CSV output     : " + config.output_csv)
-        if config.output_influx is not None:
-            print("InfluxDB output: " + config.output_influx)
-            print(
-                "Influx batching: "
-                + str(config.influx_batch_size)
-                + " points / "
-                + str(config.influx_flush_interval_seconds)
-                + " s"
-            )
-        print("Queue size     : " + str(config.queue_size))
-        print("")
+        with self._lock:
+            self._instrument_name = config.instrument_name
+            self._run_name = config.run_name
+            self._run_started = True
+            self._run_finished_logged = False
+            self._write_event("Run started: " + self._format_run_label())
+
+            print("Instrument     : " + config.instrument_name)
+            print("Run name       : " + config.run_name)
+            print("Gate time      : " + str(config.gate_time_seconds * 1000) + " ms")
+            print("Polling interval: " + str(config.polling_interval_seconds * 1000) + " ms")
+            if config.num_samples is not None:
+                print("Collecting     : " + str(config.num_samples) + " samples")
+            else:
+                print("Collecting     : indefinitely (Ctrl+C to stop)")
+            if config.output_csv is not None:
+                print("CSV output     : " + config.output_csv)
+            if config.output_influx is not None:
+                print("InfluxDB output: " + config.output_influx)
+                print(
+                    "Influx batching: "
+                    + str(config.influx_batch_size)
+                    + " points / "
+                    + str(config.influx_flush_interval_seconds)
+                    + " s"
+                )
+            print("Queue size     : " + str(config.queue_size))
+            print("")
 
     def show_status(
         self,
@@ -121,61 +195,84 @@ class ConsoleReporter(Reporter):
         queue_capacity,
         latest_frequency_text=None
     ):
-        if num_samples is None:
-            sample_status = str(sample_number)
-        else:
-            sample_percent = (sample_number / num_samples) * 100.0
-            sample_status = (
-                str(sample_number)
-                + "/" + str(num_samples)
-                + " (" + f"{sample_percent:.1f}" + "%)"
+        with self._lock:
+            if num_samples is None:
+                sample_status = str(sample_number)
+            else:
+                sample_percent = (sample_number / num_samples) * 100.0
+                sample_status = (
+                    str(sample_number)
+                    + "/" + str(num_samples)
+                    + " (" + f"{sample_percent:.1f}" + "%)"
+                )
+
+            queue_percent = (queue_depth / queue_capacity) * 100.0
+            status_text = (
+                "Sample: " + sample_status
+                + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity)
+                + " (" + f"{queue_percent:.1f}" + "%)"
             )
+            padding = ""
+            if len(status_text) < self._status_line_width:
+                padding = " " * (self._status_line_width - len(status_text))
 
-        queue_percent = (queue_depth / queue_capacity) * 100.0
-        status_text = (
-            "Sample: " + sample_status
-            + " | Queue: " + str(queue_depth) + "/" + str(queue_capacity)
-            + " (" + f"{queue_percent:.1f}" + "%)"
-        )
-        padding = ""
-        if len(status_text) < self._status_line_width:
-            padding = " " * (self._status_line_width - len(status_text))
-
-        print(
-            "\r" + status_text + padding,
-            end="",
-            flush=True
-        )
-        self._status_line_active = True
-        self._status_line_width = len(status_text)
+            print(
+                "\r" + status_text + padding,
+                end="",
+                flush=True
+            )
+            self._status_line_active = True
+            self._status_line_width = len(status_text)
 
     def show_reader_finished(self, samples_queued, reason):
-        self._end_status_line()
-        print(
-            "Instrument read loop finished. "
-            + "Samples queued: " + str(samples_queued)
-            + ". Reason: " + reason + "."
-        )
+        with self._lock:
+            self._end_status_line()
+            message = (
+                "Instrument read loop finished. "
+                + "Samples queued: " + str(samples_queued)
+                + ". Reason: " + reason + "."
+            )
+            self._write_event(message)
+            print(message)
 
     def show_polling_stopped_by_user(self):
-        self._end_status_line()
-        print("Polling stopped by user.")
+        with self._lock:
+            self._end_status_line()
+            message = "Polling stopped by user."
+            self._write_event(message)
+            print(message)
 
     def show_thread_error(self, component, error):
-        self._end_status_line()
-        print("Error in " + component + " thread: " + str(error))
+        with self._lock:
+            self._end_status_line()
+            message = "Error in " + component + " thread: " + str(error)
+            self._write_event(message)
+            print(message)
 
     def show_samples_collected(self, num_samples):
-        self._end_status_line()
-        print("Collected " + str(num_samples) + " samples. Done.")
+        with self._lock:
+            self._end_status_line()
+            message = "Collected " + str(num_samples) + " samples. Done."
+            self._write_event(message)
+            print(message)
 
     def show_error(self, message):
-        self._end_status_line()
-        print("Error: " + message)
+        with self._lock:
+            self._end_status_line()
+            rendered_message = "Error: " + message
+            self._write_event(rendered_message)
+            print(rendered_message)
 
     def show_connection_closed(self):
-        self._end_status_line()
-        print("Connection closed.")
+        with self._lock:
+            self._end_status_line()
+            self._log_run_finished()
+            self._write_event("Connection closed.")
+            print("Connection closed.")
+
+    def close(self):
+        with self._lock:
+            self._event_log.close()
 
     def _end_status_line(self):
         if self._status_line_active:
@@ -183,12 +280,26 @@ class ConsoleReporter(Reporter):
             self._status_line_active = False
             self._status_line_width = 0
 
+    def _log_run_finished(self):
+        if not self._run_started or self._run_finished_logged:
+            return
+
+        self._write_event("Run finished: " + self._format_run_label())
+        self._run_finished_logged = True
+
+    def _format_run_label(self):
+        return _build_run_label(self._instrument_name, self._run_name)
+
+    def _write_event(self, message):
+        self._event_log.write(_format_event_message(message))
+
 
 class TextualReporter(Reporter):
 
-    def __init__(self):
+    def __init__(self, event_log_path=None):
         self._lock = threading.Lock()
         self._events = deque(maxlen=_EVENT_HISTORY_LIMIT)
+        self._event_log = _EventLogFile(event_log_path)
         self._run_state = "idle"
         self._connection_closed = False
         self._resource_address = ""
@@ -211,6 +322,7 @@ class TextualReporter(Reporter):
         self._reader_finished_reason = None
         self._start_time_monotonic = None
         self._end_time_monotonic = None
+        self._run_finished_logged = False
 
     def snapshot(self):
         with self._lock:
@@ -263,10 +375,11 @@ class TextualReporter(Reporter):
             self._queue_depth = 0
             self._current_sample = 0
             self._run_state = "running"
+            self._run_finished_logged = False
             if self._start_time_monotonic is None:
                 self._start_time_monotonic = time.monotonic()
             self._append_event(
-                "Run started: " + config.instrument_name + " (" + config.run_name + ")"
+                "Run started: " + self._format_run_label()
             )
 
     def show_status(
@@ -325,8 +438,22 @@ class TextualReporter(Reporter):
     def show_connection_closed(self):
         with self._lock:
             self._connection_closed = True
-            self._end_time_monotonic = time.monotonic()
+            if self._start_time_monotonic is not None and not self._run_finished_logged:
+                self._end_time_monotonic = time.monotonic()
+                self._append_event("Run finished: " + self._format_run_label())
+                self._run_finished_logged = True
+            elif self._end_time_monotonic is None:
+                self._end_time_monotonic = time.monotonic()
             self._append_event("Connection closed.")
 
     def _append_event(self, message):
-        self._events.append(message)
+        rendered_message = _format_event_message(message)
+        self._events.append(rendered_message)
+        self._event_log.write(rendered_message)
+
+    def close(self):
+        with self._lock:
+            self._event_log.close()
+
+    def _format_run_label(self):
+        return _build_run_label(self._instrument_name, self._run_name)

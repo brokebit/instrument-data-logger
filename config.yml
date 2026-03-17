@@ -1,11 +1,12 @@
 ui: textual 
 instrument: keysight-53230a
 resource: TCPIP0::192.168.100.83::inst0::INSTR
-run_name: "0x9B"
-gate_time: .01
+run_name: "0x9A"
+gate_time: .13
 polling_interval: 1
-num_samples: 720000 
-output_csv: results-0x9B.csv
+num_samples: 100
+event_log: events-0x9A.log
+output_csv: results-0x9A.csv
 output_influx: 192.168.100.12:8086:allan_db
 influx_batch_size: 500
 influx_flush_interval: 1.0

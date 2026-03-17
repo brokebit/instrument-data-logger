@@ -48,6 +48,7 @@ class Keysight53230A(CounterInstrument):
 
         setup_commands = [
             "*RST",
+            "SENS:ROSC:SOUR EXT",
             "CONF:FREQ 1.0E7",
             "INP:IMP 50",
             "INP:LEV 0.0",
